@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SNAPKITTY: Bifrost Runner — 2D prototype</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#05060a; color:#dfe9f5; font-family:"Segoe UI",system-ui,sans-serif;
+         display:flex; flex-direction:column; align-items:center; min-height:100vh; padding:12px; }
+  #topbar { width:960px; max-width:96vw; display:flex; align-items:center; gap:12px;
+    background:#0b0e16; border:1px solid #1d2a44; border-radius:8px; padding:8px 14px; margin-bottom:10px; }
+  #topbar h1 { font-size:17px; font-weight:600; letter-spacing:2px; }
+  #topbar h1 .sk { color:#8b5cf6; }
+  #topbar .hint { margin-left:auto; font-size:12px; color:#7c8aa5; }
+  #wrap { position:relative; width:960px; max-width:96vw; }
+  canvas { width:100%; display:block; border:1px solid #1d2a44; border-radius:8px; background:#05060a; }
+  #hud { position:absolute; top:12px; left:12px; background:rgba(8,12,22,.82);
+    border:1px solid #23406e; border-radius:8px; padding:10px 14px; font-size:13px; min-width:190px; }
+  #hud .row { display:flex; justify-content:space-between; gap:18px; margin:2px 0; }
+  #hud .lbl { color:#7c8aa5; } #hud .val { color:#fff; font-variant-numeric:tabular-nums; }
+  #hud .bar { height:6px; background:#16233c; border-radius:3px; margin-top:6px; overflow:hidden; }
+  #hud .bar > div { height:100%; width:100%; background:linear-gradient(90deg,#22d3ee,#8b5cf6); }
+  #dialog { position:absolute; left:50%; bottom:18px; transform:translateX(-50%);
+    width:min(560px,90%); background:rgba(8,12,22,.92); border:1px solid #8b5cf6;
+    border-radius:10px; padding:12px 18px; display:none; }
+  #dialog .who { color:#8b5cf6; font-size:11px; letter-spacing:2px; margin-bottom:4px; }
+  #dialog .line { font-size:15px; line-height:1.5; }
+  #dialog .next { font-size:11px; color:#7c8aa5; margin-top:6px; }
+  #banner { position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+    flex-direction:column; gap:10px; background:rgba(4,6,12,.72); border-radius:8px; text-align:center; }
+  #banner h2 { font-size:34px; letter-spacing:4px; color:#22d3ee; text-shadow:0 0 24px #22d3ee88; }
+  #banner p { color:#aeb9cf; font-size:14px; max-width:420px; line-height:1.6; }
+  #banner .again { margin-top:8px; font-size:13px; color:#7c8aa5; }
+  #footer { margin-top:10px; font-size:12px; color:#525f78; }
+  kbd { background:#1a2438; border:1px solid #2c3d5e; border-radius:4px; padding:1px 7px; font-size:12px; }
+</style>
+</head>
+<body>
+<div id="topbar">
+  <h1><span class="sk">SNAPKITTY</span> // BIFROST RUNNER</h1>
+  <div class="hint"><kbd>A</kbd><kbd>D</kbd> / <kbd>&larr;</kbd><kbd>&rarr;</kbd> move &nbsp; <kbd>Space</kbd>/<kbd>W</kbd> jump &nbsp; <kbd>E</kbd> talk</div>
+</div>
+<div id="wrap">
+  <canvas id="game" width="960" height="540"></canvas>
+  <div id="hud">
+    <div class="row"><span class="lbl">BIFROST CHAIN</span><span class="val" id="hSealed">0 / 8</span></div>
+    <div class="row"><span class="lbl">INTEGRITY</span><span class="val">100%</span></div>
+    <div class="bar"><div></div></div>
+  </div>
+  <div id="dialog"><div class="who">THE ARCHITECT</div><div class="line" id="dLine"></div><div class="next"><kbd>E</kbd> continue</div></div>
+  <div id="banner"><h2>CHAIN COMPLETE</h2>
+    <p>All events sealed. Ledger integrity 100%.<br>The chain remembers — sovereignty is non-negotiable.</p>
+    <div class="again">press <kbd>R</kbd> to run it again</div></div>
+</div>
+<div id="footer">2D prototype of the Unreal/C# build &middot; art: kitten, architect, civilization, SNAP-OS</div>
+<script>
+"use strict";
+/* ================= SNAPKITTY: Bifrost Runner (2D prototype) ================= */
+const cv = document.getElementById('game'), ctx = cv.getContext('2d');
+const W = 960, H = 540;
+
+/* ---------- art ---------- */
+function load(srcs){ return new Promise(res=>{
+  const img = new Image(); let i = 0;
+  const attempt = ()=>{ if(i >= srcs.length) return res(null);
+    img.onload = ()=>res(img); img.onerror = ()=>{ i++; attempt(); }; img.src = srcs[i]; };
+  attempt();
+});}
+let IMG = {};
+const ART = {
+  kitten: ['art/kitten.png','art/kitten.jpg'],
+  architect: ['art/suited-man.png','art/suited-man.jpg'],
+  civ: ['art/civilization.jpg'],
+};
+
+/* ---------- level ---------- */
+const GRAV = 0.62, RUN = 0.9, MAXV = 5.2, JUMP = -13.2, FRICTION = 0.82;
+const WORLD_W = 2500, GROUND = 470;
+// platforms: x,y,w,h
+const PLATS = [
+  {x:-40,y:GROUND,w:640,h:80}, {x:700,y:GROUND,w:420,h:80},
+  {x:1180,y:GROUND,w:380,h:80}, {x:1620,y:GROUND,w:420,h:80}, {x:2100,y:GROUND,w:440,h:80},
+  {x:420,y:370,w:130,h:22}, {x:640,y:290,w:130,h:22}, {x:880,y:360,w:130,h:22},
+  {x:1230,y:350,w:130,h:22}, {x:1440,y:270,w:130,h:22},
+  {x:1700,y:370,w:130,h:22}, {x:1930,y:290,w:130,h:22}, {x:2180,y:370,w:120,h:22},
+];
+const CUBES = [
+  {x:480,y:320},{x:705,y:240},{x:945,y:310},{x:1295,y:300},
+  {x:1505,y:220},{x:1765,y:320},{x:1995,y:240},{x:2240,y:320},
+].map((c,i)=>({...c, id:1243+i, taken:false, t:Math.random()*6}));
+const NPCS = [
+  {x:560, lines:["Greetings, Architect. All systems nominal. Bifrost chain operational.",
+                 "Seal every event cube. Eight of them, scattered across the sector.",
+                 "Mind the gaps. The chain does not forgive a missed jump."], i:0},
+  {x:1680, lines:["Halfway there. Ledger integrity holding at 100%.",
+                  "The terminal is east of here. Finish the chain.",
+                  "Sovereignty is non-negotiable. Move, little one."], i:0},
+];
+const TERMINAL_X = 2330;
+
+/* ---------- state ---------- */
+const P = { x:80, y:GROUND-80, w:44, h:64, vx:0, vy:0, face:1, ground:false, coyote:0, bob:0 };
+let sealed = 0, won = false, camX = 0, nearNPC = null, dialogOpen = false;
+const keys = {};
+addEventListener('keydown', e=>{
+  if(['ArrowLeft','ArrowRight','ArrowUp',' ','ArrowDown'].includes(e.key)) e.preventDefault();
+  keys[e.key.toLowerCase()] = true;
+  if(e.key===' '||e.key.toLowerCase()==='w'||e.key.toLowerCase()==='arrowup') tryJump();
+  if(e.key.toLowerCase()==='e') talk();
+  if(e.key.toLowerCase()==='r' && won) reset();
+});
+addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+
+function reset(){
+  P.x=80; P.y=GROUND-80; P.vx=P.vy=0; sealed=0; won=false;
+  CUBES.forEach(c=>c.taken=false); NPCS.forEach(n=>n.i=0);
+  document.getElementById('banner').style.display='none';
+  document.getElementById('hSealed').textContent='0 / 8';
+}
+function tryJump(){ if(dialogOpen||won) return; if(P.ground||P.coyote>0){ P.vy=JUMP; P.ground=false; P.coyote=0; } }
+function talk(){
+  if(won) return;
+  if(dialogOpen){ closeDialog(); return; }
+  if(nearNPC){
+    document.getElementById('dLine').textContent = nearNPC.lines[nearNPC.i % nearNPC.lines.length];
+    nearNPC.i++;
+    document.getElementById('dialog').style.display='block';
+    dialogOpen = true;
+  }
+}
+function closeDialog(){ document.getElementById('dialog').style.display='none'; dialogOpen=false; }
+
+/* ---------- physics ---------- */
+function collide(p){
+  p.ground = false;
+  for(const pl of PLATS){
+    if(p.x+p.w > pl.x && p.x < pl.x+pl.w){
+      // falling onto top
+      if(p.vy >= 0 && p.y+p.h >= pl.y && p.y+p.h <= pl.y+pl.h+14 && (p.y+p.h - p.vy) <= pl.y+2){
+        p.y = pl.y - p.h; p.vy = 0; p.ground = true;
+      } else if(p.vy < 0 && p.y <= pl.y+pl.h && p.y >= pl.y+pl.h-16 && p.x+p.w > pl.x+4 && p.x < pl.x+pl.w-4){
+        p.y = pl.y+pl.h; p.vy = 0; // bonk
+      }
+    }
+  }
+}
+function update(){
+  if(!won && !dialogOpen){
+    let ax = 0;
+    if(keys['a']||keys['arrowleft']) ax -= 1;
+    if(keys['d']||keys['arrowright']) ax += 1;
+    P.vx += ax*RUN;
+    if(ax===0) P.vx *= FRICTION;
+    P.vx = Math.max(-MAXV, Math.min(MAXV, P.vx));
+    if(ax!==0) P.face = ax>0?1:-1;
+    P.vy = Math.min(16, P.vy + GRAV);
+    P.x += P.vx;
+    P.y += P.vy;
+    collide(P);
+    if(P.ground) P.coyote = 7; else if(P.coyote>0) P.coyote--;
+    P.bob += Math.abs(P.vx)*0.06;
+    P.x = Math.max(0, Math.min(WORLD_W-P.w, P.x));
+    if(P.y > H+120){ P.x=80; P.y=GROUND-80; P.vx=P.vy=0; } // fell in a gap: respawn
+    // pickups
+    for(const c of CUBES){
+      if(!c.taken && Math.abs(P.x+P.w/2-c.x)<42 && Math.abs(P.y+P.h/2-c.y)<52){
+        c.taken = true; sealed++;
+        document.getElementById('hSealed').textContent = sealed+' / 8';
+      }
+    }
+    // win
+    if(sealed>=8 && P.x+P.w > TERMINAL_X-30){
+      won = true;
+      document.getElementById('banner').style.display='flex';
+    }
+  }
+  // npc proximity
+  nearNPC = null;
+  for(const n of NPCS) if(Math.abs(P.x-n.x)<90) nearNPC = n;
+  // camera
+  const target = Math.max(0, Math.min(WORLD_W-W, P.x+P.w/2-W*0.42));
+  camX += (target-camX)*0.12;
+  CUBES.forEach(c=>c.t+=0.05);
+}
+
+/* ---------- drawing ---------- */
+function drawCube(x,y,t,id){
+  const s = 26+Math.sin(t*2)*2;
+  ctx.save(); ctx.translate(x,y+Math.sin(t*1.6)*6);
+  ctx.rotate(Math.sin(t*0.9)*0.12);
+  ctx.shadowColor='#22d3ee'; ctx.shadowBlur=18;
+  ctx.strokeStyle='#67e8f9'; ctx.lineWidth=2.5;
+  ctx.strokeRect(-s/2,-s/2,s,s);
+  ctx.strokeStyle='#8b5cf6aa'; ctx.lineWidth=1.5;
+  ctx.strokeRect(-s/2+6,-s/2+6,s-12,s-12);
+  ctx.beginPath(); ctx.moveTo(-s/2,-s/2); ctx.lineTo(s/2,s/2);
+  ctx.moveTo(s/2,-s/2); ctx.lineTo(-s/2,s/2); ctx.stroke();
+  ctx.shadowBlur=0; ctx.fillStyle='#dff6ff'; ctx.font='10px monospace'; ctx.textAlign='center';
+  ctx.fillText(id, 0, s/2+14);
+  ctx.restore();
+}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  // parallax civilization backdrop
+  if(IMG.civ){
+    const iw=IMG.civ.width, ih=IMG.civ.height, scale=H/ih*1.15;
+    const dw=iw*scale;
+    let ox = -(camX*0.25 % dw); if(ox>0) ox-=dw;
+    ctx.globalAlpha=0.5;
+    for(let x=ox-dw; x<W+dw; x+=dw) ctx.drawImage(IMG.civ, x, H-ih*scale, dw, ih*scale);
+    ctx.globalAlpha=1;
+  }
+  // grid overlay
+  ctx.strokeStyle='#0e1830'; ctx.lineWidth=1;
+  for(let gx=-(camX%48); gx<W; gx+=48){ ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke(); }
+  ctx.fillStyle='#04060bcc'; ctx.fillRect(0,0,W,H);
+  const ox = -Math.round(camX);
+  // platforms
+  for(const pl of PLATS){
+    const x=pl.x+ox; if(x+pl.w<-40||x>W+40) continue;
+    ctx.fillStyle='#0d1322'; ctx.fillRect(x,pl.y,pl.w,pl.h);
+    ctx.fillStyle='#1c2a4a'; ctx.fillRect(x,pl.y,pl.w,5);
+    ctx.fillStyle='#22d3ee'; ctx.fillRect(x,pl.y,pl.w,2);
+    ctx.strokeStyle='#24365c'; ctx.lineWidth=1;
+    for(let lx=x+14; lx<x+pl.w-6; lx+=26){ ctx.beginPath(); ctx.moveTo(lx,pl.y+12); ctx.lineTo(lx,pl.y+pl.h-8); ctx.stroke(); }
+  }
+  // terminal
+  {
+    const x=TERMINAL_X+ox;
+    ctx.save(); ctx.shadowColor='#8b5cf6'; ctx.shadowBlur=24;
+    ctx.strokeStyle='#a78bfa'; ctx.lineWidth=3;
+    ctx.strokeRect(x-24,GROUND-150,64,150); ctx.shadowBlur=0;
+    ctx.fillStyle='#120a2acc'; ctx.fillRect(x-24,GROUND-150,64,150);
+    ctx.fillStyle='#8b5cf6'; ctx.font='11px monospace'; ctx.textAlign='center';
+    ctx.fillText('BIFROST', x+8, GROUND-120);
+    ctx.fillStyle= sealed>=8 ? '#22d3ee' : '#3a4663';
+    ctx.fillRect(x-10,GROUND-100,36,10);
+    ctx.restore();
+  }
+  // cubes
+  for(const c of CUBES) if(!c.taken) drawCube(c.x+ox, c.y, c.t, c.id);
+  // npcs (architect)
+  for(const n of NPCS){
+    const x=n.x+ox; if(x<-80||x>W+80) continue;
+    const gy=GROUND;
+    if(IMG.architect) ctx.drawImage(IMG.architect, x-42, gy-128, 84, 128);
+    else { ctx.fillStyle='#3b82f6'; ctx.fillRect(x-20,gy-110,40,110); }
+    ctx.fillStyle='#fff'; ctx.font='10px monospace'; ctx.textAlign='center';
+    ctx.fillText('ARCHITECT', x, gy-134);
+    if(n===nearNPC && !dialogOpen){
+      ctx.fillStyle='#0b0e16ee'; ctx.strokeStyle='#8b5cf6'; ctx.lineWidth=1;
+      const tw=110; ctx.beginPath(); ctx.roundRect(x-tw/2, gy-178, tw, 24, 6); ctx.fill(); ctx.stroke();
+      ctx.fillStyle='#dfe9f5'; ctx.fillText('E — talk', x, gy-162);
+    }
+  }
+  // player (kitten)
+  {
+    const x=P.x+ox, bob=P.ground?Math.sin(P.bob)*2:0;
+    ctx.save(); ctx.translate(x+P.w/2, P.y+P.h/2+bob*0.4);
+    ctx.scale(P.face,1); ctx.rotate(P.ground?P.vx*0.02:-0.08*P.face);
+    if(IMG.kitten){
+      const iw=IMG.kitten.width, ih=IMG.kitten.height, hgt=76, wdt=hgt*iw/ih;
+      ctx.shadowColor='#8b5cf655'; ctx.shadowBlur=16;
+      ctx.drawImage(IMG.kitten, -wdt/2, -hgt/2, wdt, hgt);
+    } else { ctx.fillStyle='#8b5cf6'; ctx.fillRect(-P.w/2,-P.h/2,P.w,P.h); }
+    ctx.restore();
+    ctx.fillStyle='#fff'; ctx.font='10px monospace'; ctx.textAlign='center';
+    ctx.fillText('KITTY', x+P.w/2, P.y-46+bob*0.4);
+  }
+  // vignette
+  const g=ctx.createRadialGradient(W/2,H/2,H*0.35,W/2,H/2,H*0.85);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(0,0,0,0.45)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+}
+
+/* ---------- main loop ---------- */
+let last=0;
+function frame(ts){
+  update(); draw();
+  requestAnimationFrame(frame);
+}
+(async function boot(){
+  const [k,a,c] = await Promise.all([load(ART.kitten), load(ART.architect), load(ART.civ)]);
+  IMG.kitten=k; IMG.architect=a; IMG.civ=c;
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
